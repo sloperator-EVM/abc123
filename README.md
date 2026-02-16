@@ -13,6 +13,20 @@ This repository provides a Linux compatibility prototype for Win32-style binarie
   - `win32_api_sample.bin` (generated non-native file containing WinAPI symbols)
   - `broken_lib_sample.bin` (generated non-native file with unsupported `.so` references)
 
+## Nix shell
+
+Use this command to enter a shell with all tools needed for setup and running the samples:
+
+```bash
+nix-shell --run './setup.sh && ./target/debug/winrun tests/samples/native_ok && ./target/debug/winrun -d tests/samples/win32_api_sample.bin && ./target/debug/winrun -d tests/samples/broken_lib_sample.bin'
+```
+
+If you only want an interactive environment first:
+
+```bash
+nix-shell
+```
+
 ## Quick start
 
 ```bash
