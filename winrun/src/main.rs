@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,13 +14,38 @@ const KNOWN_WINAPI: &[&str] = &[
     "ReadFile",
     "WriteFile",
     "CloseHandle",
-    "GetLastError",
     "MessageBoxA",
     "VirtualAlloc",
     "VirtualFree",
-    "LoadLibraryA",
-    "GetProcAddress",
+    "GetLastError",
+    "SetLastError",
     "ExitProcess",
+    "GetCurrentProcess",
+    "Sleep",
+    "GetTickCount",
+    "GetModuleHandle",
+    "GetProcAddress",
+    "LoadLibrary",
+    "FreeLibrary",
+    "SendInput",
+    "mouse_event",
+    "keybd_event",
+    "GetCursorPos",
+    "SetCursorPos",
+    "GetAsyncKeyState",
+    "GetKeyState",
+    "MapVirtualKey",
+    "ShowCursor",
+    "ClipCursor",
+    "CreateThread",
+    "WaitForSingleObject",
+    "CreateEvent",
+    "SetEvent",
+    "ResetEvent",
+    "QueryPerformanceCounter",
+    "QueryPerformanceFrequency",
+    "GetSystemTime",
+    "GetLocalTime",
 ];
 
 const TRACE_MAX_STOPS: usize = 128;
@@ -34,11 +60,18 @@ fn main() {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Mode {
+    Run,
+    CompileOnly,
+}
+
 fn run() -> Result<i32, String> {
-    let (debug, target) = parse_args()?;
+    let (mode, debug, target) = parse_args()?;
 
     if debug {
         println!("=== winrun debug mode ===");
+        println!("mode: {mode:?}");
         println!("target: {}", target.display());
     }
 
@@ -56,31 +89,78 @@ fn run() -> Result<i32, String> {
     }
 
     if can_run_natively(&bytes) {
-        if debug {
-            println!("native: yes (ELF detected)");
-            if let Some(trace) = trace_with_gdb(&target)? {
+        return handle_native(mode, debug, &target, &metadata);
+    }
+
+    handle_non_native(mode, debug, &target, &bytes)
+}
+
+fn handle_native(
+    mode: Mode,
+    debug: bool,
+    target: &Path,
+    metadata: &fs::Metadata,
+) -> Result<i32, String> {
+    if debug {
+        println!("native: yes (ELF detected)");
+        if is_executable(metadata) {
+            if let Some(trace) = trace_with_gdb(target)? {
                 print_trace_report(&trace);
             } else {
                 println!("gdb-trace: unavailable (gdb missing or target not traceable)");
             }
-            println!("action: running directly on Linux");
+        } else {
+            println!("gdb-trace: skipped (target is not executable)");
         }
-        return exec_native(&target).map_err(|e| format!("native execution failed: {e}"));
+    }
+
+    if mode == Mode::CompileOnly {
+        let plan_path = plan_output_path(target);
+        fs::write(
+            &plan_path,
+            "# native ELF: no waygate translation required\n",
+        )
+        .map_err(|e| format!("failed to write plan {}: {e}", plan_path.display()))?;
+        println!("created plan: {}", plan_path.display());
+        return Ok(0);
     }
 
     if debug {
+        println!("action: running directly on Linux");
+    }
+    exec_native(target).map_err(|e| format!("native execution failed: {e}"))
+}
+
+fn handle_non_native(mode: Mode, debug: bool, target: &Path, bytes: &[u8]) -> Result<i32, String> {
+    if debug {
         println!("native: no");
+        println!(
+            "gdb-trace: skipped (non-native binaries cannot run before compatibility translation)"
+        );
         println!("action: compatibility scan + waygate dispatch");
     }
 
-    let analysis = analyze_non_native(&bytes);
-
+    let analysis = analyze_non_native(bytes);
     if debug {
         print_non_native_report(&analysis);
     }
 
     if analysis.winapi_calls.is_empty() {
         return Err("binary is not native and has no known Win32 API signatures".to_string());
+    }
+
+    let plan_path = plan_output_path(target);
+    write_plan_file(&plan_path, &analysis.winapi_calls)
+        .map_err(|e| format!("failed to write plan {}: {e}", plan_path.display()))?;
+
+    if mode == Mode::CompileOnly {
+        println!("created plan: {}", plan_path.display());
+        return Ok(0);
+    }
+
+    if debug {
+        println!("generated plan: {}", plan_path.display());
+        println!("executing plan through waygate");
     }
 
     for call in &analysis.winapi_calls {
@@ -116,12 +196,16 @@ struct Analysis {
     non_windows_libs: Vec<String>,
 }
 
-fn parse_args() -> Result<(bool, PathBuf), String> {
+fn parse_args() -> Result<(Mode, bool, PathBuf), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
-        [path] => Ok((false, PathBuf::from(path))),
-        [flag, path] if flag == "-d" => Ok((true, PathBuf::from(path))),
-        _ => Err("usage: winrun [-d] <binary-file>".to_string()),
+        [path] => Ok((Mode::Run, false, PathBuf::from(path))),
+        [flag, path] if flag == "-d" => Ok((Mode::Run, true, PathBuf::from(path))),
+        [flag, path] if flag == "-c" => Ok((Mode::CompileOnly, false, PathBuf::from(path))),
+        [flag, path] if flag == "-cd" || flag == "-dc" => {
+            Ok((Mode::CompileOnly, true, PathBuf::from(path)))
+        }
+        _ => Err("usage: winrun [-d] [-c|-cd] <binary-file>".to_string()),
     }
 }
 
@@ -139,9 +223,36 @@ fn can_run_natively(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x7F, b'E', b'L', b'F'])
 }
 
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    metadata.permissions().mode() & 0o111 != 0
+}
+
 fn exec_native(path: &Path) -> Result<i32, io::Error> {
     let err = Command::new(path).exec();
     Err(err)
+}
+
+fn plan_output_path(target: &Path) -> PathBuf {
+    let mut out = target.to_path_buf();
+    let filename = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("target");
+    out.set_file_name(format!("{filename}.waygate.plan"));
+    out
+}
+
+fn write_plan_file(path: &Path, calls: &[TracedCall]) -> io::Result<()> {
+    let mut text = String::from("# waygate execution plan\n");
+    for (idx, call) in calls.iter().enumerate() {
+        text.push_str(&format!(
+            "{}\t{}\t{}\n",
+            idx + 1,
+            call.function,
+            call.args.join("||")
+        ));
+    }
+    fs::write(path, text)
 }
 
 fn trace_with_gdb(path: &Path) -> Result<Option<Vec<TracedCall>>, String> {
@@ -310,23 +421,22 @@ fn analyze_non_native(bytes: &[u8]) -> Analysis {
     let mut ordered = Vec::new();
 
     for line in strings.lines() {
+        let trimmed = line.trim();
         for sym in KNOWN_WINAPI {
-            if line.contains(sym) {
-                ordered.push((*sym).to_string());
+            if trimmed.contains(sym) {
+                ordered.push(parse_symbol_call(trimmed, sym));
             }
         }
     }
 
     let mut seen = BTreeSet::new();
-    let winapi_calls = ordered
-        .into_iter()
-        .filter(|s| seen.insert(s.clone()))
-        .map(|function| TracedCall {
-            function,
-            args: Vec::new(),
-            backtrace: Vec::new(),
-        })
-        .collect();
+    let mut winapi_calls = Vec::new();
+    for call in ordered {
+        let signature = format!("{}({})", call.function, call.args.join(","));
+        if seen.insert(signature) {
+            winapi_calls.push(call);
+        }
+    }
 
     let mut libs = BTreeSet::new();
     for tok in strings.split_whitespace() {
@@ -341,6 +451,33 @@ fn analyze_non_native(bytes: &[u8]) -> Analysis {
     Analysis {
         winapi_calls,
         non_windows_libs: libs.into_iter().collect(),
+    }
+}
+
+fn parse_symbol_call(line: &str, symbol: &str) -> TracedCall {
+    if let Some(start) = line.find(symbol) {
+        let rest = &line[start + symbol.len()..];
+        if rest.starts_with('(') {
+            if let Some(end) = rest.find(')') {
+                let inner = &rest[1..end];
+                let args = inner
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                return TracedCall {
+                    function: symbol.to_string(),
+                    args,
+                    backtrace: Vec::new(),
+                };
+            }
+        }
+    }
+
+    TracedCall {
+        function: symbol.to_string(),
+        args: Vec::new(),
+        backtrace: Vec::new(),
     }
 }
 
@@ -394,7 +531,16 @@ fn print_trace_report(trace: &[TracedCall]) {
 fn print_non_native_report(analysis: &Analysis) {
     println!("win32api: found {} symbol(s)", analysis.winapi_calls.len());
     for (i, call) in analysis.winapi_calls.iter().enumerate() {
-        println!("  {:>2}. {}", i + 1, call.function);
+        if call.args.is_empty() {
+            println!("  {:>2}. {}", i + 1, call.function);
+        } else {
+            println!(
+                "  {:>2}. {}({})",
+                i + 1,
+                call.function,
+                call.args.join(", ")
+            );
+        }
     }
 
     if analysis.non_windows_libs.is_empty() {
