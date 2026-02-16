@@ -1,0 +1,4 @@
+/target
+/tests/samples/native_ok
+/tests/samples/win32_api_sample.bin
+/tests/samples/broken_lib_sample.bin
