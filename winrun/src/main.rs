@@ -3,7 +3,6 @@ use std::env;
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,38 +13,13 @@ const KNOWN_WINAPI: &[&str] = &[
     "ReadFile",
     "WriteFile",
     "CloseHandle",
+    "GetLastError",
     "MessageBoxA",
     "VirtualAlloc",
     "VirtualFree",
-    "GetLastError",
-    "SetLastError",
-    "ExitProcess",
-    "GetCurrentProcess",
-    "Sleep",
-    "GetTickCount",
-    "GetModuleHandle",
+    "LoadLibraryA",
     "GetProcAddress",
-    "LoadLibrary",
-    "FreeLibrary",
-    "SendInput",
-    "mouse_event",
-    "keybd_event",
-    "GetCursorPos",
-    "SetCursorPos",
-    "GetAsyncKeyState",
-    "GetKeyState",
-    "MapVirtualKey",
-    "ShowCursor",
-    "ClipCursor",
-    "CreateThread",
-    "WaitForSingleObject",
-    "CreateEvent",
-    "SetEvent",
-    "ResetEvent",
-    "QueryPerformanceCounter",
-    "QueryPerformanceFrequency",
-    "GetSystemTime",
-    "GetLocalTime",
+    "ExitProcess",
 ];
 
 const TRACE_MAX_STOPS: usize = 128;
@@ -84,14 +58,10 @@ fn run() -> Result<i32, String> {
     if can_run_natively(&bytes) {
         if debug {
             println!("native: yes (ELF detected)");
-            if is_executable(&metadata) {
-                if let Some(trace) = trace_with_gdb(&target)? {
-                    print_trace_report(&trace);
-                } else {
-                    println!("gdb-trace: unavailable (gdb missing or target not traceable)");
-                }
+            if let Some(trace) = trace_with_gdb(&target)? {
+                print_trace_report(&trace);
             } else {
-                println!("gdb-trace: skipped (target is not executable)");
+                println!("gdb-trace: unavailable (gdb missing or target not traceable)");
             }
             println!("action: running directly on Linux");
         }
@@ -100,9 +70,6 @@ fn run() -> Result<i32, String> {
 
     if debug {
         println!("native: no");
-        println!(
-            "gdb-trace: skipped (non-native binaries cannot run before compatibility translation)"
-        );
         println!("action: compatibility scan + waygate dispatch");
     }
 
@@ -170,10 +137,6 @@ fn detect_format(bytes: &[u8]) -> &'static str {
 
 fn can_run_natively(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x7F, b'E', b'L', b'F'])
-}
-
-fn is_executable(metadata: &fs::Metadata) -> bool {
-    metadata.permissions().mode() & 0o111 != 0
 }
 
 fn exec_native(path: &Path) -> Result<i32, io::Error> {

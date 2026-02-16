@@ -21,10 +21,10 @@ echo "[2/6] building workspace"
 cargo build --workspace
 
 echo "[3/6] building native sample"
-"$ROOT_DIR/tests/samples/build_native.sh"
+"$ROOT_DIR/tests/samples/build_native_sample.sh"
 
-echo "[4/6] generating compatibility samples"
-"$ROOT_DIR/tests/samples/make_samples.sh" "$TMP_DIR"
+echo "[4/6] generating non-native sample inputs"
+"$ROOT_DIR/tests/samples/generate_non_native_samples.sh" "$TMP_DIR"
 
 echo "[5/6] removing setup temporary files"
 cleanup
