@@ -7,5 +7,6 @@ pkgs.mkShell {
     rustfmt
     gcc
     binutils
+    gdb
   ];
 }
