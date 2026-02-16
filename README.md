@@ -31,14 +31,14 @@ This repository provides a Linux compatibility prototype for Win32-style binarie
 `<target>.waygate.plan` is line-based:
 
 - Header: `# waygate execution plan`
-- Each call: `<index>\t<FunctionName>\t<arg1||arg2||...>`
+- Each call: `<index>\t<FunctionName>\t<arg_name:type=value||...>`
 
 Example:
 
 ```text
-1	SetLastError	code=5
-2	Sleep	ms=25
-3	CreateThread	attrs=0||stack=0||func="worker"||param=0
+1	SetLastError	code:int=5
+2	Sleep	ms:int=25
+3	CreateThread	attrs:int=0||stack:int=0||func:string="worker"||param:int=0
 ```
 
 ## Components

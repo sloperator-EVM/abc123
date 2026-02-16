@@ -245,14 +245,68 @@ fn plan_output_path(target: &Path) -> PathBuf {
 fn write_plan_file(path: &Path, calls: &[TracedCall]) -> io::Result<()> {
     let mut text = String::from("# waygate execution plan\n");
     for (idx, call) in calls.iter().enumerate() {
+        let typed_args = typed_args_for_call(call);
         text.push_str(&format!(
             "{}\t{}\t{}\n",
             idx + 1,
             call.function,
-            call.args.join("||")
+            typed_args.join("||")
         ));
     }
     fs::write(path, text)
+}
+
+fn typed_args_for_call(call: &TracedCall) -> Vec<String> {
+    call.args.iter().map(|arg| format_typed_arg(arg)).collect()
+}
+
+fn format_typed_arg(arg: &str) -> String {
+    if let Some((name, value)) = arg.split_once('=') {
+        let ty = infer_arg_type(value.trim());
+        format!("{}:{}={}", name.trim(), ty, value.trim())
+    } else {
+        let ty = infer_arg_type(arg.trim());
+        format!("value:{}={}", ty, arg.trim())
+    }
+}
+
+fn infer_arg_type(raw: &str) -> &'static str {
+    let value = raw.trim();
+    if value.is_empty() {
+        return "unknown";
+    }
+
+    if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+        return "bool";
+    }
+
+    if (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''))
+    {
+        return "string";
+    }
+
+    if value.starts_with("0x") && value[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return "pointer";
+    }
+
+    if value.parse::<i64>().is_ok() {
+        return "int";
+    }
+
+    if value.parse::<f64>().is_ok() {
+        return "float";
+    }
+
+    if value.eq_ignore_ascii_case("null") || value.eq_ignore_ascii_case("nullptr") {
+        return "pointer";
+    }
+
+    if value.contains('/') || value.contains(".dll") || value.contains(".so") {
+        return "path";
+    }
+
+    "unknown"
 }
 
 fn trace_with_gdb(path: &Path) -> Result<Option<Vec<TracedCall>>, String> {
