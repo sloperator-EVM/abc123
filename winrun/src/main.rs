@@ -476,20 +476,40 @@ fn analyze_non_native(bytes: &[u8]) -> Analysis {
 
     for line in strings.lines() {
         let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
         for sym in KNOWN_WINAPI {
-            if trimmed.contains(sym) {
-                ordered.push(parse_symbol_call(trimmed, sym));
+            if lower.contains(&sym.to_ascii_lowercase()) {
+                ordered.push(parse_symbol_call_case_insensitive(trimmed, sym));
             }
         }
     }
 
-    let mut seen = BTreeSet::new();
+    for sym in scan_symbols_in_bytes(bytes) {
+        ordered.push(TracedCall {
+            function: sym,
+            args: Vec::new(),
+            backtrace: Vec::new(),
+        });
+    }
+
+    let mut seen_signatures = BTreeSet::new();
+    let mut seen_non_empty_args = BTreeSet::new();
     let mut winapi_calls = Vec::new();
     for call in ordered {
         let signature = format!("{}({})", call.function, call.args.join(","));
-        if seen.insert(signature) {
-            winapi_calls.push(call);
+        if !seen_signatures.insert(signature) {
+            continue;
         }
+
+        if call.args.is_empty() {
+            if seen_non_empty_args.contains(&call.function) {
+                continue;
+            }
+        } else {
+            seen_non_empty_args.insert(call.function.clone());
+        }
+
+        winapi_calls.push(call);
     }
 
     let mut libs = BTreeSet::new();
@@ -508,8 +528,10 @@ fn analyze_non_native(bytes: &[u8]) -> Analysis {
     }
 }
 
-fn parse_symbol_call(line: &str, symbol: &str) -> TracedCall {
-    if let Some(start) = line.find(symbol) {
+fn parse_symbol_call_case_insensitive(line: &str, symbol: &str) -> TracedCall {
+    let lower_line = line.to_ascii_lowercase();
+    let lower_symbol = symbol.to_ascii_lowercase();
+    if let Some(start) = lower_line.find(&lower_symbol) {
         let rest = &line[start + symbol.len()..];
         if rest.starts_with('(') {
             if let Some(end) = rest.find(')') {
@@ -533,6 +555,30 @@ fn parse_symbol_call(line: &str, symbol: &str) -> TracedCall {
         args: Vec::new(),
         backtrace: Vec::new(),
     }
+}
+
+fn scan_symbols_in_bytes(bytes: &[u8]) -> Vec<String> {
+    let lower_blob = bytes_to_ascii_lower(bytes);
+    let mut found = Vec::new();
+    for sym in KNOWN_WINAPI {
+        if lower_blob.contains(&sym.to_ascii_lowercase()) {
+            found.push((*sym).to_string());
+        }
+    }
+    found
+}
+
+fn bytes_to_ascii_lower(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| {
+            if b.is_ascii() {
+                b.to_ascii_lowercase() as char
+            } else {
+                ' '
+            }
+        })
+        .collect()
 }
 
 fn extract_ascii_strings(bytes: &[u8]) -> String {

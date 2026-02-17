@@ -81,3 +81,44 @@ nix-shell --run './setup.sh && ./target/debug/winrun tests/samples/native_sample
 
 - Setup uses a temporary working directory (`.setup-tmp`) and removes it before exit.
 - Generated sample binaries/plans are local artifacts and should remain untracked.
+
+
+## Non-native examples (how `winrun` scans)
+
+### Example A: original `.exe`
+If your binary embeds API names (imports/strings), `winrun` finds them regardless of extension:
+
+```text
+sample.exe contains: ... GetProcAddress ... CreateThread ... Sleep ...
+```
+
+Command:
+
+```bash
+./target/debug/winrun -d sample.exe
+```
+
+Expected behavior:
+- non-native path selected,
+- Win32 APIs detected,
+- `<sample.exe>.waygate.plan` generated,
+- run mode dispatches through `waygate`.
+
+### Example B: same bytes, renamed extension
+If you rename the same file (`sample.exe` -> `sample.data`), detection still works because scanning is content-based (byte/signature scan + extracted strings), not extension-based.
+
+```bash
+cp sample.exe sample.data
+./target/debug/winrun -d sample.data
+```
+
+Expected behavior is the same as Example A (plan + detected APIs).
+
+### Example C: compile-only plan generation
+Create plan without executing stubs:
+
+```bash
+./target/debug/winrun -cd sample.data
+```
+
+This writes `sample.data.waygate.plan` with typed args, e.g. `timeout:int=1000`.
