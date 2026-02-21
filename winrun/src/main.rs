@@ -73,6 +73,7 @@ fn run() -> Result<i32, String> {
         println!("=== winrun debug mode ===");
         println!("mode: {mode:?}");
         println!("target: {}", target.display());
+        debug_log("init", "collecting file metadata");
     }
 
     let metadata = fs::metadata(&target).map_err(|e| format!("failed to stat target: {e}"))?;
@@ -86,6 +87,7 @@ fn run() -> Result<i32, String> {
     if debug {
         println!("format: {format}");
         println!("size: {} bytes", bytes.len());
+        debug_log("inspect", "format detection finished");
     }
 
     if can_run_natively(&bytes) {
@@ -103,6 +105,7 @@ fn handle_native(
 ) -> Result<i32, String> {
     if debug {
         println!("native: yes (ELF detected)");
+        debug_log("native", "entering Linux execution path");
         if is_executable(metadata) {
             if let Some(trace) = trace_with_gdb(target)? {
                 print_trace_report(&trace);
@@ -127,6 +130,7 @@ fn handle_native(
 
     if debug {
         println!("action: running directly on Linux");
+        debug_log("native", "dispatching to execve");
     }
     exec_native(target).map_err(|e| format!("native execution failed: {e}"))
 }
@@ -138,6 +142,7 @@ fn handle_non_native(mode: Mode, debug: bool, target: &Path, bytes: &[u8]) -> Re
             "gdb-trace: skipped (non-native binaries cannot run before compatibility translation)"
         );
         println!("action: compatibility scan + waygate dispatch");
+        debug_log("non-native", "analyzing candidate Win32 symbols");
     }
 
     let analysis = analyze_non_native(bytes);
@@ -152,6 +157,16 @@ fn handle_non_native(mode: Mode, debug: bool, target: &Path, bytes: &[u8]) -> Re
     let plan_path = plan_output_path(target);
     write_plan_file(&plan_path, &analysis.winapi_calls)
         .map_err(|e| format!("failed to write plan {}: {e}", plan_path.display()))?;
+    if debug {
+        debug_log(
+            "plan",
+            &format!(
+                "wrote {} API calls to {}",
+                analysis.winapi_calls.len(),
+                plan_path.display()
+            ),
+        );
+    }
 
     if mode == Mode::CompileOnly {
         println!("created plan: {}", plan_path.display());
@@ -180,7 +195,15 @@ fn handle_non_native(mode: Mode, debug: bool, target: &Path, bytes: &[u8]) -> Re
         }
     }
 
+    if debug {
+        debug_log("done", "waygate dispatch finished successfully");
+    }
+
     Ok(0)
+}
+
+fn debug_log(stage: &str, msg: &str) {
+    eprintln!("[debug:{stage}] {msg}");
 }
 
 #[derive(Clone, Debug)]
