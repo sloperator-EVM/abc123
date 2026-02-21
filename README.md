@@ -11,14 +11,20 @@ Linux compatibility prototype for Win32-style binaries.
 
 ## Test layout
 
-`tests/winapi/*.c` contains debug Win32 API programs compiled into `.exe` files with MinGW.
+`tests/winapi/*.c` are **debug specs** (plain C files) that list expected Win32 calls via lines like:
 
-Included debug programs currently validate scanner/dispatch coverage for:
+```c
+WINAPI_CALL: SetCursorPos(x=500, y=300)
+```
+
+`tests/build_exes.sh` turns those specs into synthetic `.exe` fixtures (PE-like text blobs with `MZFAKE` + API call lines) so `winrun` can exercise the non-native scan/plan/dispatch path without Windows SDK headers or real Windows compilation.
+
+Included specs currently validate scanner/dispatch coverage for:
 
 - cursor APIs (`SetCursorPos`, `GetCursorPos`, `ShowCursor`)
 - input APIs (`SendInput`, `mouse_event`, `keybd_event`, `MapVirtualKey`, `GetAsyncKeyState`, `GetKeyState`)
-- runtime APIs (`SetLastError`, `GetLastError`, `Sleep`, `GetTickCount`, `GetModuleHandleA`, `GetProcAddress`, `LoadLibraryA`, `FreeLibrary`)
-- threading/time APIs (`CreateThread`, `WaitForSingleObject`, `CreateEventA`, `SetEvent`, `ResetEvent`, `CloseHandle`, `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetSystemTime`, `GetLocalTime`)
+- runtime APIs (`SetLastError`, `GetLastError`, `Sleep`, `GetTickCount`, `GetModuleHandle`, `GetProcAddress`, `LoadLibrary`, `FreeLibrary`)
+- threading/time APIs (`CreateThread`, `WaitForSingleObject`, `CreateEvent`, `SetEvent`, `ResetEvent`, `CloseHandle`, `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetSystemTime`, `GetLocalTime`)
 
 ## Setup / installer
 
@@ -30,7 +36,7 @@ Included debug programs currently validate scanner/dispatch coverage for:
 
 1. formats Rust code
 2. builds workspace
-3. compiles all `tests/winapi/*.c` into `.exe`
+3. generates all `tests/winapi/*.exe` fixtures from spec `.c` files
 4. runs `tests/test.sh` (auto-discovers all `.exe` and runs `winrun -d`)
 
 ## Manual commands
@@ -39,11 +45,10 @@ Included debug programs currently validate scanner/dispatch coverage for:
 ./tests/build_exes.sh
 ./tests/test.sh
 ./target/debug/winrun -d tests/winapi/setpos_debug.exe
+./target/debug/winrun -c tests/winapi/setpos_debug.exe
 ```
 
-## Nix shell (with MinGW)
-
-The provided `shell.nix` includes Rust + MinGW, so setup works end-to-end:
+## Nix shell
 
 ```bash
 nix-shell --run './setup.sh'

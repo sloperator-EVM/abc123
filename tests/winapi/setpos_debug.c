@@ -1,15 +1,13 @@
 #include <stdio.h>
-#include <Windows.h>
+
+/*
+WINAPI_CALL: SetCursorPos(x=500, y=300)
+WINAPI_CALL: GetCursorPos(point="out")
+WINAPI_CALL: ShowCursor(show=true)
+WINAPI_CALL: ShowCursor(show=false)
+*/
 
 int main(void) {
-    POINT p = {0};
-
-    puts("setpos_debug start");
-    SetCursorPos(500, 300);
-    GetCursorPos(&p);
-    ShowCursor(TRUE);
-    ShowCursor(FALSE);
-
-    printf("cursor after SetCursorPos: x=%ld y=%ld\n", (long)p.x, (long)p.y);
+    puts("setpos_debug spec");
     return 0;
 }
