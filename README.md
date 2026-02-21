@@ -17,7 +17,7 @@ Linux compatibility prototype for Win32-style binaries.
 WINAPI_CALL: SetCursorPos(x=500, y=300)
 ```
 
-`tests/build_exes.sh` turns those specs into synthetic `.exe` fixtures (PE-like text blobs with `MZFAKE` + API call lines) so `winrun` can exercise the non-native scan/plan/dispatch path without Windows SDK headers or real Windows compilation.
+`tests/build_exes.sh` parses the debug C files, resolves simple variable assignments used in WinAPI calls, and generates synthetic `.exe` fixtures (PE-like text blobs with `MZFAKE` + API call lines). This gives argument tracing output like `SetCursorPos(x=500, y=100)` and `SendInput(cInputs=4, pInputs=inputs, cbSize=40)` without requiring Windows SDK headers.
 
 Included specs currently validate scanner/dispatch coverage for:
 

@@ -1,17 +1,18 @@
+#include <stdint.h>
 #include <stdio.h>
 
-/*
-WINAPI_CALL: SetLastError(code=42)
-WINAPI_CALL: GetLastError()
-WINAPI_CALL: GetTickCount()
-WINAPI_CALL: LoadLibrary(path="user32.dll")
-WINAPI_CALL: GetProcAddress(module=1, name="SetCursorPos")
-WINAPI_CALL: GetModuleHandle(module="kernel32.dll")
-WINAPI_CALL: FreeLibrary(module=1)
-WINAPI_CALL: Sleep(ms=10)
-*/
-
 int main(void) {
-    puts("runtime_debug spec");
+    int code = 42;
+    int ms = 10;
+
+    SetLastError(code);
+    GetLastError();
+    GetTickCount();
+    LoadLibrary("user32.dll");
+    GetProcAddress(1, "SetCursorPos");
+    GetModuleHandle("kernel32.dll");
+    FreeLibrary(1);
+    Sleep(ms);
+
     return 0;
 }
