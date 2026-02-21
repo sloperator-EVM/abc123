@@ -44,8 +44,11 @@ pub fn dispatch(symbol: &str, args: &[String]) -> WaygateResult {
 
 fn stub(name: &str, args: &[String]) -> WaygateResult {
     if args.is_empty() {
-        Ok(format!("{name} stub called"))
+        Ok(format!("[waygate] {name} stub called"))
     } else {
-        Ok(format!("{name} stub called with args: {}", args.join(", ")))
+        Ok(format!(
+            "[waygate] {name} stub called with args: {}",
+            args.join(", ")
+        ))
     }
 }

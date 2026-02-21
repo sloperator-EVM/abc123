@@ -2,32 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TMP_DIR="$ROOT_DIR/.setup-tmp"
-
-cleanup() {
-  rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT
-
-rm -rf "$TMP_DIR"
-mkdir -p "$TMP_DIR"
 
 cd "$ROOT_DIR"
 
-echo "[1/6] formatting Rust code"
+echo "[1/5] formatting Rust code"
 cargo fmt --all
 
-echo "[2/6] building workspace"
+echo "[2/5] building workspace"
 cargo build --workspace
 
-echo "[3/6] building native sample"
-"$ROOT_DIR/tests/samples/build_native.sh"
+echo "[3/5] building Windows debug test executables"
+"$ROOT_DIR/tests/build_exes.sh"
 
-echo "[4/6] generating compatibility samples"
-"$ROOT_DIR/tests/samples/make_samples.sh" "$TMP_DIR"
+echo "[4/5] running debug compatibility tests"
+"$ROOT_DIR/tests/test.sh"
 
-echo "[5/6] removing setup temporary files"
-cleanup
-
-echo "[6/6] done"
-echo "Use: ./target/debug/winrun [-d] tests/samples/<file>"
+echo "[5/5] done"
+echo "Use: ./target/debug/winrun -d tests/winapi/<sample>.exe"
