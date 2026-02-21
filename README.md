@@ -1,124 +1,42 @@
 # winrun + waygate (prototype)
 
-This repository provides a Linux compatibility prototype for Win32-style binaries.
+Linux compatibility prototype for Win32-style binaries.
 
 ## CLI modes
 
 - `winrun <file>`: run mode.
-- `winrun -d <file>`: run mode + debug logs.
-- `winrun -c <file>`: compile-only mode (do not run), generate a `.waygate.plan` file.
+- `winrun -d <file>`: run mode + detailed debug logs.
+- `winrun -c <file>`: compile-only mode (writes `.waygate.plan`, no execution).
 - `winrun -cd <file>`: compile-only mode + debug logs.
 
-## How it runs (end-to-end)
+## Test layout
 
-### 1) Input inspection
-`winrun` reads the target file, checks format (`ELF`, `PE/COFF`, `unknown`), and chooses a path.
+`tests/winapi/*.c` contains debug Win32 API programs compiled into `.exe` files with MinGW.
 
-### 2) Native ELF path
-- `winrun` / `winrun -d`: runs the ELF directly on Linux.
-- Debug mode optionally attempts gdb tracing for known Win32-style symbols.
-- `winrun -c` / `-cd`: does not execute; writes a note plan (`<file>.waygate.plan`) saying translation is not required for native ELF.
+Included debug programs currently validate scanner/dispatch coverage for:
 
-### 3) Non-native path (`.exe` / custom `.bin`)
-- gdb trace is skipped (non-native files can’t run before compatibility translation).
-- Strings are scanned for known Win32 API symbols and inline argument snippets like `Sleep(ms=10)`.
-- A plan file is written beside the target: `<file>.waygate.plan`.
-- In run mode (`winrun` / `-d`) the plan is executed immediately through `waygate` stubs in detected order.
-- In compile-only mode (`-c` / `-cd`) the plan is generated only; no execution happens.
+- cursor APIs (`SetCursorPos`, `GetCursorPos`, `ShowCursor`)
+- input APIs (`SendInput`, `mouse_event`, `keybd_event`, `MapVirtualKey`, `GetAsyncKeyState`, `GetKeyState`)
+- runtime APIs (`SetLastError`, `GetLastError`, `Sleep`, `GetTickCount`, `GetModuleHandleA`, `GetProcAddress`, `LoadLibraryA`, `FreeLibrary`)
+- threading/time APIs (`CreateThread`, `WaitForSingleObject`, `CreateEventA`, `SetEvent`, `ResetEvent`, `CloseHandle`, `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetSystemTime`, `GetLocalTime`)
 
-## Plan file format
-
-`<target>.waygate.plan` is line-based:
-
-- Header: `# waygate execution plan`
-- Each call: `<index>\t<FunctionName>\t<arg_name:type=value||...>`
-
-Example:
-
-```text
-1	SetLastError	code:int=5
-2	Sleep	ms:int=25
-3	CreateThread	attrs:int=0||stack:int=0||func:string="worker"||param:int=0
-```
-
-## Components
-
-- `winrun/`: CLI runner and scanner/plan generator.
-- `waygate/`: placeholder Linux-side implementations (stubs) for detected Win32 API names.
-- `tests/samples/`:
-  - `native.c` -> built as `native_sample`
-  - `winapi_sample.bin`
-  - `broken_sample.bin`
-
-## Win32 API scan coverage
-
-- Process/runtime: `GetLastError`, `SetLastError`, `ExitProcess`, `GetCurrentProcess`, `Sleep`, `GetTickCount`, `GetModuleHandle`, `GetProcAddress`, `LoadLibrary`, `FreeLibrary`
-- Input/cursor: `SendInput`, `mouse_event`, `keybd_event`, `GetCursorPos`, `SetCursorPos`, `GetAsyncKeyState`, `GetKeyState`, `MapVirtualKey`, `ShowCursor`, `ClipCursor`
-- Thread/sync/time: `CreateThread`, `WaitForSingleObject`, `CreateEvent`, `SetEvent`, `ResetEvent`, `CloseHandle`, `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetSystemTime`, `GetLocalTime`
-
-## Setup
+## Setup / installer
 
 ```bash
 ./setup.sh
 ```
 
-## Quick start
+`setup.sh` now:
+
+1. formats Rust code
+2. builds workspace
+3. compiles all `tests/winapi/*.c` into `.exe`
+4. runs `tests/test.sh` (auto-discovers all `.exe` and runs `winrun -d`)
+
+## Manual commands
 
 ```bash
-./target/debug/winrun tests/samples/native_sample
-./target/debug/winrun -d tests/samples/winapi_sample.bin
-./target/debug/winrun -c tests/samples/winapi_sample.bin
-./target/debug/winrun -cd tests/samples/winapi_sample.bin
+./tests/build_exes.sh
+./tests/test.sh
+./target/debug/winrun -d tests/winapi/setpos_debug.exe
 ```
-
-## Nix shell
-
-```bash
-nix-shell --run './setup.sh && ./target/debug/winrun tests/samples/native_sample && ./target/debug/winrun -d tests/samples/winapi_sample.bin && ./target/debug/winrun -c tests/samples/winapi_sample.bin'
-```
-
-## Notes
-
-- Setup uses a temporary working directory (`.setup-tmp`) and removes it before exit.
-- Generated sample binaries/plans are local artifacts and should remain untracked.
-
-
-## Non-native examples (how `winrun` scans)
-
-### Example A: original `.exe`
-If your binary embeds API names (imports/strings), `winrun` finds them regardless of extension:
-
-```text
-sample.exe contains: ... GetProcAddress ... CreateThread ... Sleep ...
-```
-
-Command:
-
-```bash
-./target/debug/winrun -d sample.exe
-```
-
-Expected behavior:
-- non-native path selected,
-- Win32 APIs detected,
-- `<sample.exe>.waygate.plan` generated,
-- run mode dispatches through `waygate`.
-
-### Example B: same bytes, renamed extension
-If you rename the same file (`sample.exe` -> `sample.data`), detection still works because scanning is content-based (byte/signature scan + extracted strings), not extension-based.
-
-```bash
-cp sample.exe sample.data
-./target/debug/winrun -d sample.data
-```
-
-Expected behavior is the same as Example A (plan + detected APIs).
-
-### Example C: compile-only plan generation
-Create plan without executing stubs:
-
-```bash
-./target/debug/winrun -cd sample.data
-```
-
-This writes `sample.data.waygate.plan` with typed args, e.g. `timeout:int=1000`.
