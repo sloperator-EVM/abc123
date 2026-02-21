@@ -40,3 +40,11 @@ Included debug programs currently validate scanner/dispatch coverage for:
 ./tests/test.sh
 ./target/debug/winrun -d tests/winapi/setpos_debug.exe
 ```
+
+## Nix shell (with MinGW)
+
+The provided `shell.nix` includes Rust + MinGW, so setup works end-to-end:
+
+```bash
+nix-shell --run './setup.sh'
+```
