@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -494,54 +494,192 @@ fn parse_arg_line(line: &str) -> Option<(String, String)> {
 }
 
 fn analyze_non_native(bytes: &[u8]) -> Analysis {
-    let strings = extract_ascii_strings(bytes);
-    let mut ordered = Vec::new();
+    if let Some(parsed) = parse_pe_imports(bytes) {
+        return parsed;
+    }
+    parse_synthetic_fixture(bytes)
+}
 
-    for line in strings.lines() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        for sym in KNOWN_WINAPI {
-            if lower.contains(&sym.to_ascii_lowercase()) {
-                ordered.push(parse_symbol_call_case_insensitive(trimmed, sym));
+fn parse_pe_imports(bytes: &[u8]) -> Option<Analysis> {
+    let pe = PeContext::parse(bytes)?;
+    let import_rva = pe.import_rva;
+    if import_rva == 0 {
+        return Some(Analysis::default());
+    }
+
+    let mut seen = HashSet::new();
+    let mut calls = Vec::new();
+    let mut idx = 0usize;
+    loop {
+        let desc = pe.rva_to_offset(import_rva as usize + (idx * 20))?;
+        let original_first_thunk = read_u32(bytes, desc)?;
+        let name_rva = read_u32(bytes, desc + 12)?;
+        let first_thunk = read_u32(bytes, desc + 16)?;
+        if original_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
+            break;
+        }
+
+        let thunk_rva = if original_first_thunk != 0 {
+            original_first_thunk
+        } else {
+            first_thunk
+        } as usize;
+        let thunk_size = if pe.is_pe64 { 8 } else { 4 };
+        let ordinal_flag: u64 = if pe.is_pe64 {
+            0x8000_0000_0000_0000
+        } else {
+            0x8000_0000
+        };
+
+        let mut t = 0usize;
+        loop {
+            let thunk_off = match pe.rva_to_offset(thunk_rva + t * thunk_size) {
+                Some(v) => v,
+                None => break,
+            };
+            let entry = if pe.is_pe64 {
+                read_u64(bytes, thunk_off)?
+            } else {
+                read_u32(bytes, thunk_off)? as u64
+            };
+            if entry == 0 {
+                break;
+            }
+            if entry & ordinal_flag == 0 {
+                let hint_name = pe.rva_to_offset(entry as usize)?;
+                let name = read_c_string(bytes, hint_name + 2)?;
+                if KNOWN_WINAPI.contains(&name.as_str()) && seen.insert(name.clone()) {
+                    calls.push(TracedCall {
+                        function: name,
+                        args: Vec::new(),
+                        backtrace: Vec::new(),
+                    });
+                }
+            }
+            t += 1;
+        }
+
+        idx += 1;
+    }
+
+    Some(Analysis {
+        winapi_calls: calls,
+        non_windows_libs: Vec::new(),
+    })
+}
+
+struct PeSection {
+    virtual_address: usize,
+    mapped_size: usize,
+    raw_ptr: usize,
+}
+
+struct PeContext {
+    is_pe64: bool,
+    import_rva: u32,
+    sections: Vec<PeSection>,
+}
+
+impl PeContext {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 0x40 || !bytes.starts_with(b"MZ") {
+            return None;
+        }
+
+        let pe_offset = read_u32(bytes, 0x3C)? as usize;
+        if pe_offset.checked_add(0x18)? > bytes.len() {
+            return None;
+        }
+        if bytes.get(pe_offset..pe_offset + 4)? != b"PE\0\0" {
+            return None;
+        }
+
+        let section_count = read_u16(bytes, pe_offset + 6)? as usize;
+        let optional_size = read_u16(bytes, pe_offset + 20)? as usize;
+        let optional_header_offset = pe_offset + 24;
+        let magic = read_u16(bytes, optional_header_offset)?;
+        let (is_pe64, data_directory_offset) = match magic {
+            0x10B => (false, optional_header_offset + 96),
+            0x20B => (true, optional_header_offset + 112),
+            _ => return None,
+        };
+
+        let import_rva = read_u32(bytes, data_directory_offset + 8)?;
+        let section_table = pe_offset + 24 + optional_size;
+        let mut sections = Vec::with_capacity(section_count);
+        for i in 0..section_count {
+            let sec = section_table + i * 40;
+            let virtual_size = read_u32(bytes, sec + 8)? as usize;
+            let virtual_address = read_u32(bytes, sec + 12)? as usize;
+            let raw_size = read_u32(bytes, sec + 16)? as usize;
+            let raw_ptr = read_u32(bytes, sec + 20)? as usize;
+            sections.push(PeSection {
+                virtual_address,
+                mapped_size: virtual_size.max(raw_size),
+                raw_ptr,
+            });
+        }
+
+        Some(Self {
+            is_pe64,
+            import_rva,
+            sections,
+        })
+    }
+
+    fn rva_to_offset(&self, rva: usize) -> Option<usize> {
+        for section in &self.sections {
+            if rva >= section.virtual_address && rva < section.virtual_address + section.mapped_size
+            {
+                return section.raw_ptr.checked_add(rva - section.virtual_address);
             }
         }
+        None
     }
+}
 
-    for sym in scan_symbols_in_bytes(bytes) {
-        ordered.push(TracedCall {
-            function: sym,
-            args: Vec::new(),
-            backtrace: Vec::new(),
-        });
-    }
-
+fn parse_synthetic_fixture(bytes: &[u8]) -> Analysis {
+    let text = String::from_utf8_lossy(bytes);
     let mut seen_signatures = BTreeSet::new();
     let mut seen_non_empty_args = BTreeSet::new();
     let mut winapi_calls = Vec::new();
-    for call in ordered {
-        let signature = format!("{}({})", call.function, call.args.join(","));
-        if !seen_signatures.insert(signature) {
+    let mut libs = BTreeSet::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("mzfake") {
             continue;
         }
 
-        if call.args.is_empty() {
-            if seen_non_empty_args.contains(&call.function) {
-                continue;
-            }
-        } else {
-            seen_non_empty_args.insert(call.function.clone());
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.ends_with(".dll") {
+            continue;
         }
-
-        winapi_calls.push(call);
-    }
-
-    let mut libs = BTreeSet::new();
-    for tok in strings.split_whitespace() {
-        let lower = tok
-            .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.')
-            .to_ascii_lowercase();
         if lower.ends_with(".so") {
             libs.insert(lower);
+            continue;
+        }
+
+        for sym in KNOWN_WINAPI {
+            if !lower.contains(&sym.to_ascii_lowercase()) {
+                continue;
+            }
+
+            let call = parse_symbol_call_case_insensitive(trimmed, sym);
+            let signature = format!("{}({})", call.function, call.args.join(","));
+            if !seen_signatures.insert(signature) {
+                continue;
+            }
+
+            if call.args.is_empty() {
+                if seen_non_empty_args.contains(&call.function) {
+                    continue;
+                }
+            } else {
+                seen_non_empty_args.insert(call.function.clone());
+            }
+
+            winapi_calls.push(call);
         }
     }
 
@@ -549,6 +687,32 @@ fn analyze_non_native(bytes: &[u8]) -> Analysis {
         winapi_calls,
         non_windows_libs: libs.into_iter().collect(),
     }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        bytes.get(offset..offset + 8)?.try_into().ok()?,
+    ))
+}
+
+fn read_c_string(bytes: &[u8], offset: usize) -> Option<String> {
+    let slice = bytes.get(offset..)?;
+    let end = slice.iter().position(|b| *b == 0)?;
+    std::str::from_utf8(&slice[..end])
+        .ok()
+        .map(|s| s.to_string())
 }
 
 fn parse_symbol_call_case_insensitive(line: &str, symbol: &str) -> TracedCall {
@@ -578,59 +742,6 @@ fn parse_symbol_call_case_insensitive(line: &str, symbol: &str) -> TracedCall {
         args: Vec::new(),
         backtrace: Vec::new(),
     }
-}
-
-fn scan_symbols_in_bytes(bytes: &[u8]) -> Vec<String> {
-    let lower_blob = bytes_to_ascii_lower(bytes);
-    let mut found = Vec::new();
-    for sym in KNOWN_WINAPI {
-        if lower_blob.contains(&sym.to_ascii_lowercase()) {
-            found.push((*sym).to_string());
-        }
-    }
-    found
-}
-
-fn bytes_to_ascii_lower(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| {
-            if b.is_ascii() {
-                b.to_ascii_lowercase() as char
-            } else {
-                ' '
-            }
-        })
-        .collect()
-}
-
-fn extract_ascii_strings(bytes: &[u8]) -> String {
-    let mut result = String::new();
-    let mut start = None;
-
-    for (i, b) in bytes.iter().enumerate() {
-        if b.is_ascii_graphic() || *b == b' ' {
-            if start.is_none() {
-                start = Some(i);
-            }
-        } else if let Some(s) = start.take() {
-            if i.saturating_sub(s) >= 4 {
-                let slice = &bytes[s..i];
-                result.push_str(&String::from_utf8_lossy(slice));
-                result.push('\n');
-            }
-        }
-    }
-
-    if let Some(s) = start {
-        if bytes.len().saturating_sub(s) >= 4 {
-            let slice = &bytes[s..];
-            result.push_str(&String::from_utf8_lossy(slice));
-            result.push('\n');
-        }
-    }
-
-    result
 }
 
 fn print_trace_report(trace: &[TracedCall]) {

@@ -2,6 +2,10 @@
 
 Linux compatibility prototype for Win32-style binaries.
 
+The compatibility path is import-driven: `winrun` reads the program's Windows DLL import
+table and routes matching API symbols into `waygate`. This avoids decompilation and mirrors
+the interface-interception model used by compatibility layers such as Wine.
+
 ## CLI modes
 
 - `winrun <file>`: run mode.
